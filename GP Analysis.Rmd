@@ -1,0 +1,402 @@
+---
+title: "Penuel The Black Pen - YT Channel descriptive analysis"
+date:  "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r message=FALSE,warning=FALSE}
+library(httr)
+library(dplyr)
+library(jsonlite)
+```
+
+
+Outline: 
+
+1. Pulling relevant data from YT API
+
+2. Testing the "affiliation effect"
+
+3. Exploratory Analysis
+
+4. Top performing videos
+
+5. Closing remarks
+
+# Pulling relevant data from YT API
+
+```{r, warning=FALSE,message=FALSE}
+
+## Sample code for extracting YouTube Data in R Penuel's channel using username
+
+# input your youtube API key
+
+key = "AIzaSyB7gCrBBUVi775tGiec9LcKMs60Aa7JqH4"
+
+# setting up variables, that'll be frequently used
+channel_id <- "UCtdTwmNiROeEqmv_SGk513g"  # God Penuel Channel ID
+base <- "https://www.googleapis.com/youtube/v3/"
+
+# Construct the API call
+# Construct the API call
+api_params <- 
+  paste(paste0("key=", key), 
+        paste0("id=", channel_id), 
+        "part=snippet,contentDetails,statistics",
+        sep = "&")
+api_call <- paste0(base, "channels", "?", api_params)
+api_result <- GET(api_call)
+json_result <- content(api_result, "text", encoding="UTF-8")
+
+# Process the raw data into a data frame
+channel.json = fromJSON(json_result, flatten = T)
+channel.df = as.data.frame(channel.json)
+
+playlist_id <- channel.df$items.contentDetails.relatedPlaylists.uploads
+
+```
+
+# Processing the videos from the channel
+
+```{r warning=FALSE,message=FALSE}
+
+# temporary variables
+nextPageToken = ""
+upload.df = NULL
+pageInfo = NULL
+
+# Loop through the playlist while there is still a next page
+while (!is.null(nextPageToken)) {
+  # Construct the API call
+  api_params <- 
+    paste(paste0("key=", key), 
+          paste0("playlistId=", playlist_id), 
+          "part=snippet,contentDetails,status",
+          "maxResults=50",
+          sep = "&")
+  
+  # Add the page token for page 2 onwards
+  if(nextPageToken != "") {
+    api_params <- paste0(api_params,
+                         "&pageToken=",nextPageToken)
+  }
+  
+  api_call <- paste0(base, "playlistItems", "?", api_params)
+  api_result <- GET(api_call)
+  json_result <- content(api_result, "text", encoding="UTF-8")
+  upload.json <- fromJSON(json_result, flatten = T)
+  
+  nextPageToken <- upload.json$nextPageToken
+  pageInfo <- upload.json$pageInfo
+  
+  curr.df <- as.data.frame(upload.json$items)
+  if (is.null(upload.df)) {
+    upload.df <- curr.df
+  } else {
+    upload.df <- bind_rows(upload.df, curr.df)
+  }
+}
+
+video.df<- NULL
+# Loop through all uploaded videos
+for (i in 1:nrow(upload.df)) {
+  # Construct the API call
+  video_id <- upload.df$contentDetails.videoId[i]
+  api_params <- 
+    paste(paste0("key=", key), 
+          paste0("id=", video_id), 
+          "part=id,statistics,contentDetails",
+          sep = "&")
+  
+  api_call <- paste0(base, "videos", "?", api_params)
+  api_result <- GET(api_call)
+  json_result <- content(api_result, "text", encoding="UTF-8")
+  video.json <- fromJSON(json_result, flatten = T)
+  
+  curr.df <- as.data.frame(video.json$items)
+  
+  if (is.null(video.df)) {
+    video.df <- curr.df
+  } else {
+    video.df <- bind_rows(video.df, curr.df)
+  }
+}  
+
+# Combine all video data frames
+video.df$contentDetails.videoId <- video.df$id
+video_final.df <- merge(x = upload.df, 
+                        y = video.df,
+                        by = "contentDetails.videoId")
+
+write.csv(x = channel.df,
+          row.names = F,
+          file = "God_Penuel_Channel_updated.csv")
+write.csv(x = video_final.df,
+          row.names = F,
+          file = "God_Penuel_Uploads_updated.csv")
+
+```
+
+
+# Reading in the data
+```{r warning=FALSE,message=FALSE}
+##------------------------------Reading-In-The-Data---------------------------##
+
+# Loading in the relevant packages
+library(readxl)
+library(tidyverse)
+library(lubridate)
+
+# generate a full path to a file
+filename = "God_Penuel_Uploads_updated.csv"
+
+full_path = file.path(getwd(), filename)
+
+gp_data = read.csv(file = full_path, header = TRUE, sep = ",")
+
+# dealing with the video durations
+xx = gp_data$contentDetails.duration %>% ms()
+
+yy = gp_data$contentDetails.duration %>% hms()
+
+xx_one = xx %>% period_to_seconds()
+
+yy_one = yy %>% period_to_seconds()
+
+gp_data$contentDetails.duration[which(!is.na(xx))] = xx_one[which(!is.na(xx))]
+
+gp_data$contentDetails.duration[which(!is.na(yy))] = yy_one[which(!is.na(yy))]
+
+gp_data$contentDetails.duration = str_extract(gp_data$contentDetails.duration, "\\d+")
+
+gp_data$contentDetails.duration = as.numeric(gp_data$contentDetails.duration)
+
+gp_final = gp_data[,c(5,7,36,42,43,45)]
+
+gp_final$snippet.publishedAt = gp_final$snippet.publishedAt %>% as_date
+
+# sort from the least recent to most recent
+gp_order = gp_final %>% arrange(desc(ymd(gp_final$snippet.publishedAt)))
+
+# aggregating video statistics
+sum(gp_order$statistics.viewCount)
+sum(gp_order$statistics.likeCount)
+sum(!is.na(gp_order$statistics.commentCount))
+
+# dealing with videos where the comments are disabled
+gp_order$statistics.commentCount[is.na(gp_order$statistics.commentCount)] = 0
+
+# appending engagement metric into the dataset
+gp_order$engagement = ( (gp_order$statistics.likeCount +
+                          gp_order$statistics.commentCount)/gp_order$statistics.viewCount )*100
+```
+
+
+# Affiliation effect
+
+## Exploring the views over time (between 2021 & 2022)
+
+```{r warning=FALSE,message=FALSE}
+# Libraries
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(viridis)
+library(ggrepel)
+library(ggthemes)
+library(moments)
+
+# Isolating 2021 and 2022
+## Line plot
+recent_videos = gp_order %>% 
+  filter(substr(snippet.publishedAt,1,4)=="2021" | 
+           substr(snippet.publishedAt,1,4)=="2022")
+
+views_twt = recent_videos %>% ggplot(aes(snippet.publishedAt, 
+                                           statistics.viewCount))
+
+l_twt =  views_twt + geom_line(col = "black", size =1.4)+geom_smooth(method='loess',formula = 'y~x',
+                  aes(color = "Trend Line"))+
+  labs( x = "Date", y = "Views (Count)")+
+  scale_colour_manual(name = "Legend", values = "red")+
+  geom_vline(xintercept = as.numeric(recent_videos$snippet.publishedAt[233]), 
+             color = "purple", linetype=2, size = 1.6) +
+  annotate("text", x = recent_videos$snippet.publishedAt[229],
+           y = 50000,label = "Hustler's Corner", angle = 360, size = 4) +
+  geom_vline(xintercept = as.numeric(recent_videos$snippet.publishedAt[64]), 
+             color = "pink", linetype=2, size = 1.6) +
+  annotate("text", x = recent_videos$snippet.publishedAt[64],
+           y = 50000, label = "MacG", angle = 360, size = 4) +
+  ggtitle("Views plotted against time (2021 & 2022)")+
+  theme_fivethirtyeight(base_size = 11, base_family = "sans")+
+  theme(axis.title = element_text())
+
+l_twt
+```
+
+
+## Segmenting the views data by the relevant dates
+```{r message=FALSE,warning=FALSE}
+#### In-depth investigation into the affiliation effect
+b4_hc = gp_order %>% filter(snippet.publishedAt <= "2022-02-07") 
+
+af_hc_b4_mcg = gp_order %>% filter(snippet.publishedAt > "2022-02-07" &
+                                     snippet.publishedAt <= "2022-08-11")
+
+af_mcg = gp_order %>% filter(snippet.publishedAt > "2022-08-11")
+
+### Pairwise differences
+pair_types = data.frame(
+  groups = c(rep(1, 276), rep(2, 170), rep(3, 62)),
+  views = c(b4_hc$statistics.viewCount, 
+            af_hc_b4_mcg$statistics.viewCount, 
+            af_mcg$statistics.viewCount)
+)
+
+pair_types
+```
+
+
+## Quick summary statistics
+
+```{r warning=FALSE,message=FALSE}
+library(dplyr)
+pair_types %>% select(groups, views) %>%
+  group_by(groups) %>%
+  summarise(
+    count = n(),
+    mean = mean(views, na.rm = TRUE),
+    sd = sd(views, na.rm = TRUE)
+  )
+```
+
+
+## Boxplot of the different subsets of data
+
+```{r warning=FALSE,message=FALSE}
+# Plot weight by group and color by group
+library("ggpubr")
+ggboxplot(pair_types, x = "groups", y = "views", 
+          color = "groups",
+          order = c(1, 2, 3),
+          ylab = "Views", xlab = "Groups")
+
+```
+
+## Paired t-tests
+
+```{r warning=FALSE,message=FALSE}
+with(pair_types, pairwise.t.test(views, groups))
+
+```
+Interpretations of pairwise-sample t-tests:
+
+$$
+H_{0}: \mu_{2} = \mu_{1}
+\\
+H_{1}: \mu_{2} > \mu_{1}
+$$
+The average number of views that TBP channel recieved after the 7th of Feb(the date he first appeared on the Hustler's corner with DJ Sbu) is significantly greater than before his appearance on the Hustler's corner; with probability < 0.001% that this is due to random chance.
+
+$$
+H_{0}: \mu_{3} = \mu_{2}
+\\
+H_{1}: \mu_{3} > \mu_{2}
+$$
+The average number of views that TBP channel recieved after the 11th of Aug(the date he first appeared on Podcast & Chill with MacG & Sol) is significantly greater than before his appearance on Podcast & Chill; with probability < 0.001% that this is due to random chance.
+
+
+# Exploratory Data Analysis (With a focus on correlation)
+
+## Views vs. Likes
+
+```{r message=FALSE,warning=FALSE}
+### views vs. Likes
+scatter_gg = gp_order %>% ggplot(aes(x = statistics.likeCount, 
+                                             y = statistics.viewCount, 
+                                             color = engagement))
+
+s_graph =  scatter_gg + geom_point()+
+  labs( x = "Likes", y = "Views")+
+  ggtitle("Views vs. Likes")+
+  theme_fivethirtyeight(base_size = 11, base_family = "sans")+
+  theme(axis.title = element_text())
+
+s_graph + geom_smooth(method = "loess", color = "red")
+
+```
+
+## Views vs. Comment count
+
+```{r message=FALSE, warning=FALSE}
+scatter_two = gp_order %>% ggplot(aes(x = statistics.commentCount, 
+                                              y = statistics.viewCount, 
+                                              color = engagement))
+
+s_graph_two =  scatter_two + geom_point()+
+  labs( x = "Comments (Count)", y = "Views")+
+  ggtitle("Views vs. Comments")+
+  theme_fivethirtyeight(base_size = 11, base_family = "sans")+
+  theme(axis.title = element_text())
+
+s_graph_two + geom_smooth(method = "loess", color = "red")
+
+```
+
+## Views vs. Video duration
+
+```{r message=FALSE,warning=FALSE}
+scatter_three = gp_order %>% ggplot(aes(x = contentDetails.duration, 
+                                      y = statistics.viewCount, 
+                                      color = engagement))
+
+s_graph_three =  scatter_three + geom_point()+
+  labs( x = "Video Duration (In seconds)", y = "Views")+
+  ggtitle("Views vs. Video Duration")+
+  theme_fivethirtyeight(base_size = 11, base_family = "sans")+
+  theme(axis.title = element_text())
+
+s_graph_three + geom_smooth(method = "loess", color = "red")
+```
+
+
+
+# Top performing videos
+
+
+
+
+<table>
+
+Video title                                                                           Date of Upload        Views
+----------                                                                         ------------------       --------
+1. Rob Hersov: "Why the ANC must be removed from power & the future of South Africa      2022-08-12            65987
+2. My Interview on Podcast & Chill with Mac G & Sol | Calling for Sponsors               2022-08-12            53080
+3. Catching up with my old man, Joshua Maponga... speaking Dzimbabgwe & Solutions        2022-06-24            51087
+4. Gayton McKenzie: A Brief Chat with The Hardest-Working Politician in SA               2022-08-15            49074
+5. Vusi Thembekwayo vs Sizwe Dhlomo 🔥🔥🔥                                               2017-06-17            45776
+6. Jacob Zuma was a Sensational Educator | Africans Helping South Africans | Rights      2022-09-19            38331
+7. My Thoughts on The John Steenhuizen Interview on Podcast & Chill | Pol. Homework      2022-08-21            37944
+8. Elias Monage of The BBC tells Ramaphosa & The ANC to go home for failing              2022-07-01            30975
+9. I disagree with Vusi Thembekwayo                                                      2018-09-16            27743
+10. Big Zulu & 150 Bars | Moneao | Getting Scammed by Your Partner | Reusable Pads       2022-08-22            27513
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<\table>
